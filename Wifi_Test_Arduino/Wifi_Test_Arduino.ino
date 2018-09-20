@@ -292,7 +292,7 @@ void readChar(){
     if (c == '\r') {                  // '\r' is being used as a deliminator to siginify end of String
       flag = 1;
     } else {
-      if (c <= 126 && c >= 32 | c == '\n') {      // Helps to discard any garbled data.
+      if (c <= 126 && c >= 32 || c == '\n') {      // Helps to discard any garbled data.
         str.concat(c);
       }
     }
