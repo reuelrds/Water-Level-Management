@@ -61,6 +61,11 @@ int isConn = 0;
 //      once connection to Internet has been established.
 int val = 0;
 
+/*****
+  Variable to store type of cnnection mode
+*****/
+int type = 0;
+
 
 /*******************************************************************
   Initial Setup
@@ -101,16 +106,35 @@ void loop() {
   if (flag == 1) {
     reader.detach();
     str.trim();
-    if (str == "<ConnectToWlan>") {
+    if (str == "<ConnectToWlan>" || str == "<ConnectByWPS>") {
+      if (str == "<ConnectToWlan>"){
+        type = 1;
+      } else {
+        type = 2;
+      }
       Serial.print("<Connecting>\r");
       delay(500);
     } else if (str == "<ConnectReqAck>") {
       if (isConn != 1) {
-        connectWlan();  
+        if (type == 1) {
+          connectWlan();
+        } else {
+          bool success = startWpsSetup();
+          if(!success){
+            Serial.print("Failed to connect with WPS.");
+            Serial.print("Trying with provided SSID and Password\r");
+            type = 1;
+          } else {
+            isConn = 1;
+            Serial.print("<Connected>\r");
+          }
+        }
       }
     } else {                // At this point the Esp is Connected to Internet and we can start uploading data
-      val = str.toInt();
-      uploadValues();
+      if (isConn){
+        val = str.toInt();
+        uploadValues();
+      }
     }
     str = "";
     flag = 0;
@@ -187,6 +211,30 @@ void uploadValues() {
   ThingSpeak.writeFields(channelNumber, privateKey);
   Serial.print("Sent val: " + String(val) + "\r");
   delay(1000);
+}
+
+/*******************************************************************
+  WPS Setup
+********************************************************************/
+bool startWpsSetup() {
+  Serial.print("Esp8266: Starting WPS Setup....\r");
+  bool wpsSuccess = WiFi.beginWPSConfig();
+  if(wpsSuccess) {
+      // Well this means not always success :-/ in case of a timeout we have an empty ssid
+      String newSSID = WiFi.SSID();
+      if(newSSID.length() > 0) {
+        // WPSConfig has already connected in STA mode successfully to the new station. 
+        Serial.print("Esp8266: WPS finished.\n");
+        Serial.print("Eso8266: Connected successfull.\n");
+        Serial.print("SSID: ");
+        Serial.print(newSSID.c_str());
+        Serial.print('\r');
+        delay(500);
+      } else {
+        wpsSuccess = false;
+      }
+  }
+  return wpsSuccess; 
 }
 
 /*******************************************************************
