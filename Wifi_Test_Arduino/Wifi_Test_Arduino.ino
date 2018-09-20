@@ -6,6 +6,7 @@
 #include <SoftwareSerial.h>
 #include <Ticker.h>
 #include <TimerOne.h>
+#include <Button.h>
 
 
 /*******************************************************************
@@ -44,6 +45,29 @@ Ticker setupEsp(setupWlan, 5000);
 // note: we change the frequency from 5sec to 30sec after sending ack string for first time.
 Ticker ackEsp(ackConn, 5000);
 
+// Setting up ESP to Connect to a WiFi Access Point via WPS
+// It fires a connection request string <ConnectByWPS> every 5seconds
+// untill the Esp responds with acknowlwdgement string <Connecting>
+Ticker setupEspWPS(setupWPS, 5000);
+
+// Checks button presses when connection to Wifi Access Point via WPS
+Ticker button(buttonCheck, 250);
+
+
+/*****
+ Initializing Button Object
+*****/
+// Checks button state and
+// It takes care of debouncing the button when is pressed
+// Note:  The Push Button is connected to Digital Pin 2
+Button buttonWPS(2);
+
+
+/*****
+  Variable to store button count
+*****/
+// Note:  it is used to turn the button off when pressed twice.
+int btnCount = 0;
 
 /*****
   Variables for receiving data from Esp
@@ -122,7 +146,26 @@ void setup() {
   ackEsp.start();
   ackEsp.pause();
   printer.start();
-  setupEsp.start();
+
+// Setting up how Esp connects to WiFi Access Point
+  int choice = setupConnType();
+  if (choice == 1) {
+    Serial.println("Connecting to WiFi AP via SSID and Password....");
+    setupEsp.start();
+  } else {
+
+/*****
+    Initializing Button object
+*****/
+    // Note:  The Button Object(buttonWPS) and the Ticker Object(button) work together
+    //        for setting up the Esp to connect to Wifi AP.
+    //        The Wifi AP needs to be in WPS config mode before the ESP can connect.
+    //        So, After the initial button press on the Arduino, we can press the WPS button 
+    //        on the WIFI AP and then press the one connected to Arduino board to begin setup.
+    buttonWPS.begin();
+    button.start();
+    Serial.println("Press the Button to Connect to WLAN");
+  }
 }
 
 
@@ -136,12 +179,14 @@ void loop() {
 *****/
 
   if (ack == 0 && isConn == 0) {
-    setupEsp.update();  
+    setupEsp.update();
+    setupEspWPS.update();  
   } else if ( ack == 1 && isConn == 0) {
     
-    // Stop SetupEsp ticker Object once the Esp responds with <Connecting> string
+    // Stop setupEsp & setupEspWPS ticker Object once the Esp responds with <Connecting> string
     // and start sending acknowledgement
-    setupEsp.stop();                        
+    setupEsp.stop();
+    setupEspWPS.stop();                        
     if (ackEsp.state() == PAUSED) {
       ackEsp.resume();
     } else {
@@ -162,7 +207,8 @@ void loop() {
   }
 
   printer.update();
-
+  button.update();
+  
   // Change interval of sending ack String to Esp
   // to 30 sec as connecting to wifi may take some time.
   if(ackEsp.counter() == 1) {
@@ -170,10 +216,35 @@ void loop() {
   }
 }
 
+
+/*******************************************************************
+  Setup Wifi Config
+********************************************************************/
+int setupConnType(){
+  int ch = 0;
+  Serial.println("Setting up WLAN Commection\n");
+  Serial.println("1. Connect via SSID and Password provided\n2.Connect via WPS");
+  Serial.println("Choose a Connection Option: ");
+  
+  while(ch == 0){
+    if(Serial.available()){
+      ch = (int)Serial.read()-48;
+    }
+  }
+  Serial.println("Choice: ");
+  Serial.print(ch);
+  Serial.println("\n");
+  return ch;
+}
+
 /*******************************************************************
   Callback Functions
 ********************************************************************/
 
+void setupWPS(){
+  espSerial.print("<ConnectByWPS>\r");
+  Serial.print("Sent wps req...");
+}
 
 void setupWlan() {
   espSerial.print("<ConnectToWlan>\r");
@@ -221,10 +292,25 @@ void readChar(){
     if (c == '\r') {                  // '\r' is being used as a deliminator to siginify end of String
       flag = 1;
     } else {
-      if (c <= 126 && c >= 32) {      // Helps to discard any garbled data.
+      if (c <= 126 && c >= 32 | c == '\n') {      // Helps to discard any garbled data.
         str.concat(c);
       }
     }
     
+  }
+}
+
+void buttonCheck() {
+    
+  if (buttonWPS.toggled() && buttonWPS.read() == Button::RELEASED) {
+    btnCount++;
+    if (btnCount == 1) {
+      Serial.println("\nPress the WPS Button on the WiFi Access Point. And then,");
+      Serial.println("Press the Button connected to Arduino once again to start the setup");
+    } else if (btnCount == 2) {
+      Serial.println("\nStarting Setup.....");
+      setupEspWPS.start();
+      button.stop();
+    }
   }
 }
