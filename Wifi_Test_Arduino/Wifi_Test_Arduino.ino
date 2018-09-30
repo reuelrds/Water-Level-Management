@@ -54,6 +54,9 @@ Ticker setupEspWPS(setupWPS, 5000);
 Ticker button(buttonCheck, 250);
 
 
+Ticker pump(checkPump, 1000);
+
+
 /*****
  Initializing Button Object
 *****/
@@ -62,6 +65,17 @@ Ticker button(buttonCheck, 250);
 // Note:  The Push Button is connected to Digital Pin 2
 Button buttonWPS(2);
 
+/*****
+ Declaring Pins for HC-SR04
+*****/
+int trigPin = 11;
+int echoPin = 12;
+
+
+/*****
+ Declaring Signal Pin for relay
+*****/
+int relaySig = 7;
 
 /*****
   Variable to store button count
@@ -85,6 +99,17 @@ int flag = 0;
 // val: is used to as a dummy data to be uploaded to ThingSpeak,
 //      once connection to Internet has been established
 int val = 0;
+float msec;
+float distance;
+
+
+/*****
+  Variable ised while calculating initial tank depth
+*****/
+boolean isBaseDistSet=false;
+String distCmd = "";
+float initialDist;
+
 
 /*****
   Flags for Setting up connection
@@ -105,6 +130,8 @@ void setup() {
 /*****
   Setting Up ISR for Reading Characters from ESP
 *****/
+  pinMode(relaySig, OUTPUT);
+  stopPump();
 
 // TimerOne Library uses Timer interrupts to read characters received from Esp
 // It interrupts the sketch every 1millisecond and executes readChar function 
@@ -133,6 +160,14 @@ void setup() {
   delay(100);
 
 /*****
+  Setting up Ultrasonic Sensor
+*****/
+  // Define input and output pins
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+
+/*****
   Starting Ticker Objects
 *****/
 
@@ -146,6 +181,8 @@ void setup() {
   ackEsp.start();
   ackEsp.pause();
   printer.start();
+  pump.start();
+  pump.pause();
 
 // Setting up how Esp connects to WiFi Access Point
   int choice = setupConnType();
@@ -198,12 +235,35 @@ void loop() {
     // Stop ackEsp ticker Object once the Esp responds with <Connected> string
     // and start sending dummy Data
     ackEsp.stop();
-    if (sender.state() == PAUSED) {
-      sender.resume();
+
+    if (!isBaseDistSet){
+      Serial.println("\n Initial Base Distance or Tank Depth is not Set.");
+      Serial.println("\nSend <CaliberateSR04> command to the Arduino to set the initial distance.");
+      distCmd="";
+      int sf=0;
+      while(sf == 0) {
+        if (Serial.available() > 0){
+          distCmd += (char)Serial.read();
+        }
+        distCmd.trim();
+        if (distCmd == "<CaliberateSR04>") {
+          sf = 1;
+        }
+      }
+      isBaseDistSet = true;
+      Serial.println("Calculating initial depth");
+      initialDist = calcDistance();
+      Serial.println("Initial depth: " + String(initialDist));
+      Serial.println("\n\nUploading Data");
     } else {
-      sender.update();    
+        if (sender.state() == PAUSED) {
+        sender.resume();
+        pump.resume();
+      } else {
+        sender.update();
+        pump.update();
+      }
     }
-    
   }
 
   printer.update();
@@ -237,6 +297,28 @@ int setupConnType(){
   return ch;
 }
 
+
+
+/*******************************************************************
+  Calculate Depth of Water
+********************************************************************/
+float calcDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  // Read input from echo pin
+  msec = pulseIn(echoPin, HIGH);
+
+  // Calculate distance from time
+  distance = 0.034837*(msec/2.0);
+  Serial.println("\nDIST: " + String(distance));
+
+  return distance;
+}
+
 /*******************************************************************
   Callback Functions
 ********************************************************************/
@@ -257,8 +339,29 @@ void ackConn() {
 
 
 void sendData() {
-  espSerial.print(String(val) + "\r");
-  val++;
+  float percent = ((initialDist - calcDistance()) / initialDist)*100;
+  espSerial.print(String(percent) + "\r");
+}
+
+void checkPump() {
+  float dist = calcDistance();
+  float percent = ((initialDist - dist) / initialDist)*100;
+  Serial.println("Percent: " + String(percent));
+  if (percent > 60.0) {
+    stopPump();
+  } else if (percent < 40.0) {
+    startPump();
+  }
+}
+
+void startPump() {
+  Serial.println("Pump Started");
+  digitalWrite(relaySig, LOW);
+}
+
+void stopPump() {
+  digitalWrite(relaySig, HIGH);
+  Serial.println("Pump Stoped");
 }
 
 void printString() {
