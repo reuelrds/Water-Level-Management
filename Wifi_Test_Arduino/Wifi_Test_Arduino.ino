@@ -53,7 +53,9 @@ Ticker setupEspWPS(setupWPS, 5000);
 // Checks button presses when connection to Wifi Access Point via WPS
 Ticker button(buttonCheck, 250);
 
-
+// Checks the water level every 1 sec 
+// And starts the water pump if water level is less than 40%
+// And stops the water pump if water level is greater than 60%
 Ticker pump(checkPump, 1000);
 
 
@@ -68,14 +70,15 @@ Button buttonWPS(2);
 /*****
  Declaring Pins for HC-SR04
 *****/
-int trigPin = 11;
-int echoPin = 12;
+int trigPin = 12;
+int echoPin = 11;
 
 
 /*****
  Declaring Signal Pin for relay
 *****/
-int relaySig = 7;
+// This controls the relay
+int relaySig = 13;
 
 /*****
   Variable to store button count
@@ -104,7 +107,7 @@ float distance;
 
 
 /*****
-  Variable ised while calculating initial tank depth
+  Variable is used while calculating initial tank depth
 *****/
 boolean isBaseDistSet=false;
 String distCmd = "";
@@ -130,17 +133,25 @@ void setup() {
 /*****
   Setting Up ISR for Reading Characters from ESP
 *****/
+
+// the relaySig pin controlls the relay. 
+// If the Output Signal is LOW, the pump starts
+// And if the Output signal is HIGH, the pump stops
   pinMode(relaySig, OUTPUT);
+
+// Calling stopPump to ensure that the Water Pump remains shut while the initial setup takes place
+// and to start only if water level is less than 40%, which is handled by pump ticker object (calls checkPump method every 1sec)
   stopPump();
 
 // TimerOne Library uses Timer interrupts to read characters received from Esp
-// It interrupts the sketch every 1millisecond and executes readChar function 
+// It interrupts the sketch every 1 millisecond and executes readChar function 
 // to read Characters received from esp if there are any
 
 // Note:  The interval of 1 millicscond or 1000 microseconds is choosen because
-//        the Arduino and Esp communicate at a baud rate of 9600bps.
+//        the Arduino and Esp are set to communicate at a baud rate of 9600bps.
 //        At this baud rate, a single character (ie. a byte of data. As ASCII characters are represented by 8 bits),
-//        requires roughly 833.33 microseconds to be transfered between Esp and Arduino
+//        requires roughly 833.33 microseconds to be transfered between Esp and Arduino 
+//        (assuming that the distance between two is not large)
   Timer1.initialize(1000);
   Timer1.attachInterrupt(readChar);
   delay(50);
@@ -215,15 +226,21 @@ void loop() {
   Here we check for events and fire appopriate methods to handle them
 *****/
 
+  // Note: The update() method needs to be called every iteration for ticker bojects 
+  //        so that they can check their time since last tick(called their callback function).
+
   if (ack == 0 && isConn == 0) {
+    // Run this untill Esp responds with <Connecting>
+    
     setupEsp.update();
-    setupEspWPS.update();  
+    setupEspWPS.update(); 
   } else if ( ack == 1 && isConn == 0) {
     
     // Stop setupEsp & setupEspWPS ticker Object once the Esp responds with <Connecting> string
     // and start sending acknowledgement
     setupEsp.stop();
-    setupEspWPS.stop();                        
+    setupEspWPS.stop();      
+                      
     if (ackEsp.state() == PAUSED) {
       ackEsp.resume();
     } else {
@@ -236,6 +253,8 @@ void loop() {
     // and start sending dummy Data
     ackEsp.stop();
 
+    // Checks if initial depth is set. If not it requests it from user to send <CaliberateSR04>
+    
     if (!isBaseDistSet){
       Serial.println("\n Initial Base Distance or Tank Depth is not Set.");
       Serial.println("\nSend <CaliberateSR04> command to the Arduino to set the initial distance.");
@@ -250,12 +269,17 @@ void loop() {
           sf = 1;
         }
       }
+
+      // Received <CaliberateSR04> command. Call calcDistance to calculate intital distance
       isBaseDistSet = true;
       Serial.println("Calculating initial depth");
       initialDist = calcDistance();
+
+      // Initial distance is set.
       Serial.println("Initial depth: " + String(initialDist));
       Serial.println("\n\nUploading Data");
     } else {
+      // As Initial distance is set, now start mointoring the water level and sending data to Thingspeak
         if (sender.state() == PAUSED) {
         sender.resume();
         pump.resume();
@@ -303,13 +327,18 @@ int setupConnType(){
   Calculate Depth of Water
 ********************************************************************/
 float calcDistance() {
+
+ // We send a LOW signal to ensure that the sensor is deactivated before it activates
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
+
+  // Ultrasonic sensor needs s HIGH Signal for 10 microseconds to activate
   digitalWrite(trigPin, HIGH);
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
 
   // Read input from echo pin
+  // the msec holds the time required for the sound waves to go and come back
   msec = pulseIn(echoPin, HIGH);
 
   // Calculate distance from time
@@ -322,6 +351,8 @@ float calcDistance() {
 /*******************************************************************
   Callback Functions
 ********************************************************************/
+
+// Note: the explaination to what these functions do is given right at the top where the Ticker Objects are declared
 
 void setupWPS(){
   espSerial.print("<ConnectByWPS>\r");
@@ -388,21 +419,6 @@ void printString() {
   }
 }
 
-void readChar(){
-  if(espSerial.available() > 0) {
-    c = (char)espSerial.read();
-    
-    if (c == '\r') {                  // '\r' is being used as a deliminator to siginify end of String
-      flag = 1;
-    } else {
-      if (c <= 126 && c >= 32 || c == '\n') {      // Helps to discard any garbled data.
-        str.concat(c);
-      }
-    }
-    
-  }
-}
-
 void buttonCheck() {
     
   if (buttonWPS.toggled() && buttonWPS.read() == Button::RELEASED) {
@@ -415,5 +431,24 @@ void buttonCheck() {
       setupEspWPS.start();
       button.stop();
     }
+  }
+}
+
+
+void readChar(){
+
+  // Note: This is an ISR (Interrupt Service Routine) which gets Called every time TimerOne interrupts the Microprocessor
+  
+  if(espSerial.available() > 0) {
+    c = (char)espSerial.read();
+    
+    if (c == '\r') {                  // '\r' is being used as a deliminator to siginify end of String
+      flag = 1;
+    } else {
+      if (c <= 126 && c >= 32 || c == '\n') {      // Helps to discard any garbled data.
+        str.concat(c);
+      }
+    }
+    
   }
 }

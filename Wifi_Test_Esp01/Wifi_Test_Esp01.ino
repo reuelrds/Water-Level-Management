@@ -16,21 +16,22 @@
 /*****
   Declaring Ticker Object
 *****/
+// This calls an ISR 1 msec to read data from arduino. 
+// (See comment for starting Ticker object in setup method)
 Ticker reader;
 
 /*****
   Declaring WiFi ssid and password
 *****/
-// Note:  This ssid and password are for my phones hotspot.
-//        These values will need to be changed when using some other WiFi AP
+// Note:  These values will need to be changed when using some other WiFi AP
 const char* ssid = "ReuelRds";
 const char* password = "reuelrds1234";
 
 /*****
   Variables uesd to connect and upload data to ThingSpeak Cloud
 *****/
-// Note:  The private key and channel number are related to my ThingSpeak account
-//        These will need to be changed when we deploy the prototype model
+// Note:  The private key and channel number are related to the ThingSpeak account
+//        These will need to be changed if we use a different thingspeak account
 const char* host = "api.thingspeak.com";
 const char* privateKey = "09E2POZ8LM87VIBT";
 const int channelNumber = 570672;
@@ -62,8 +63,10 @@ int isConn = 0;
 int val = 0;
 
 /*****
-  Variable to store type of cnnection mode
+  Variable to store type of connection mode
 *****/
+// Note:  Type 1 indicates the connection is to be setup using SSID and Password provided in the sketch
+//        Type 2 indiactes connection is to be setup using WPS Setup
 int type = 0;
 
 
@@ -76,7 +79,7 @@ void setup() {
   Setting up Serial Connection with Arduino
 *****/
 // Initialize Serial Connection between Arduino and ESP at a baud rate of 9600bps
-// Note:  The reason for choosing this particular baud rate was specified in the TimerOne Note in Arduino Sketch
+// Note:  The TimerOne Note in Arduino Sketch specifies the reason for choosing this baud rate. 
 //        And also lower baud rate ensures less errors.
   Serial.begin(9600);
   delay(100);
@@ -84,13 +87,13 @@ void setup() {
 /*****
   Disconnect from WiFi AP
 *****/
-// Note:  We Don't need Esp sending data unless Arduino sends it after it knows Esp is Connected to Internet
+// Note:  We Don't need Esp sending data unless Arduino sends it.
   WiFi.disconnect();
 
 /*****
   Starting Ticker Object
 *****/
-// fire readChar function every 1 millisecond to capture character received from Arduino.
+// Fire readChar function every 1 millisecond to capture character received from Arduino.
 // Note:  The reason for choosing this time interval was specified in the TimerOne Note in Arduino Sketch
   reader.attach_ms(1, readChar);
 }
@@ -104,48 +107,56 @@ void setup() {
 void loop() {
 
   if (flag == 1) {
+
+    // Stop the ticker and trim the recieved string of any white spaces or carriage returns
     reader.detach();
     str.trim();
+    
     if (str == "<ConnectToWlan>" || str == "<ConnectByWPS>") {
+
+      // Check how should we connect to WiFi
       if (str == "<ConnectToWlan>"){
         type = 1;
       } else {
         type = 2;
       }
+
+      // Send Acknowledgement string to Arduino
       Serial.print("<Connecting>\r");
       delay(500);
+      
     } else if (str == "<ConnectReqAck>") {
+
+      // Once Arduino responds with acknowledgement, start the process to connect to WiFi
       if (isConn != 1) {
+        
         if (type == 1) {
           connectWlan();
         } else {
-          bool success = startWpsSetup();
-          if(!success){
-            Serial.print("Failed to connect with WPS.");
-            Serial.print("Trying with provided SSID and Password\r");
-            type = 1;
-          } else {
-            isConn = 1;
-            Serial.print("<Connected>\r");
-          }
+          connectWPS();
         }
       }
-    } else {                // At this point the Esp is Connected to Internet and we can start uploading data
+      
+    } else {                
+      // At this point the Esp is Connected to Internet and we can start uploading data
       if (isConn){
-        val = str.toInt();
+        val = str;
         uploadValues();
       }
     }
+
+    // Clear the string buffer, flag and restart the Ticker to recieve further data strings
     str = "";
     flag = 0;
     reader.attach_ms(1, readChar);
+    
   }
 }
 
 
 
 /*******************************************************************
-  Establish COnnection to Wifi Access Point
+  Establish Connection to Wifi Access Point Using SSID and Password
 ********************************************************************/
 void connectWlan() {
 
@@ -190,32 +201,27 @@ void connectWlan() {
   delay(500);
 }
 
+
+
 /*******************************************************************
-  Uploading values to ThingSpeak Client
+  Establish Connection to Wifi Access Point using WPS Setup
 ********************************************************************/
-void uploadValues() {
 
-  // Note:  Need to test if all these statements except 
-  //        setField and writeFields can be moved to setup block.
+void connectWPS() {
   
-  // Use WiFiClient class to create TCP connections
-  WiFiClient client;
-  const int httpPort = 80;
-  if (!client.connect(host, httpPort)) {
-    Serial.print("connection failed\r");
+  bool success = startWpsSetup();
+  if(!success){
+    Serial.print("Failed to connect with WPS.");
+    Serial.print("Trying with provided SSID and Password\r");
+    type = 1;
+  } else {
+    isConn = 1;
+    Serial.print("<Connected>\r");
   }
-
-  // Uploading the value received from Arduino
-  ThingSpeak.begin(client);
-  ThingSpeak.setField(1, val);
-  ThingSpeak.writeFields(channelNumber, privateKey);
-  Serial.print("Sent val: " + String(val) + "\r");
-  delay(1000);
+    
 }
 
-/*******************************************************************
-  WPS Setup
-********************************************************************/
+
 bool startWpsSetup() {
   Serial.print("Esp8266: Starting WPS Setup....\r");
   bool wpsSuccess = WiFi.beginWPSConfig();
@@ -237,13 +243,40 @@ bool startWpsSetup() {
   return wpsSuccess; 
 }
 
+
+/*******************************************************************
+  Uploading values to ThingSpeak Client
+********************************************************************/
+void uploadValues() {
+
+  // TODO:  Need to test if all these statements except 
+  //        setField and writeFields can be moved to setup block.
+  
+  // Use WiFiClient class to create TCP connections
+  WiFiClient client;
+  const int httpPort = 80;
+  if (!client.connect(host, httpPort)) {
+    Serial.print("connection failed\r");
+  }
+
+  // Uploading the value received from Arduino
+  ThingSpeak.begin(client);
+  ThingSpeak.setField(1, val);
+  ThingSpeak.writeFields(channelNumber, privateKey);
+  Serial.print("Sent val: " + String(val) + "\r");
+  delay(1000);
+}
+
 /*******************************************************************
   Callback function to read a Character received from Arduino
 ********************************************************************/
+
+// Note:  This is an ISR called by Ticker for reading characters for Arduino
+
 void readChar() {
   if (Serial.available() > 0) {
     c = (char)Serial.read();
-    if (c == '\r') {
+    if (c == '\r') {    // '\r' is being used as a deliminator to siginify end of String
       flag = 1;
     } else {
       str.concat(c);
